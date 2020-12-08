@@ -3,7 +3,7 @@
 Going through the process of learning Dex (and twitch). 
 
 * Session 1: What do the symbols mean?
-* Session 2: Building a Typed NN
+* Session 2: Building a Typed NN (https://www.twitch.tv/videos/829303664?t=0h3m4s)
 
 ==============
 
