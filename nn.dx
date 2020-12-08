@@ -2,10 +2,26 @@
 
 ' Create some data
 
+-- want to learn the parameters of w1 b1 w2 b2
+
+
+-- 1 - get gradient of forward
+-- 2 - loop
+-- 3 - state in order to update
+
+
+instance pairAdd : Add a ?=> Add b ?=> Add (a & b) where
+  add = \(a, b) (a', b'). (a + a', b + b')
+  sub = \(a, b) (a', b'). (a - a', b - b')
+  zero = (zero, zero)
+
+@instance pairVS : VSpace a ?=> VSpace b ?=> VSpace (a & b) =
+    MkVSpace pairAdd (\ s (a', b'). (s .* a', s .* b'))
+
+
 grid: ((Fin 10) & (Fin 10)) => (Float & Float)  =
    for (i, j).
-       (IToF (ordinal i),
-        IToF (ordinal j))
+       (IToF (ordinal i), IToF (ordinal j))
 
 x = grid
 y = for i.
@@ -19,73 +35,68 @@ def to_vec ((a, b):(Float & Float)) : (Fin 2) => Float =
 
 ' Neural network
 
+def WnB (a:Type) (b:Type) : Type  =
+   (a => b => Float &
+    b => Float)
+
+
 def relu (input : Float) : Float =
   select (input > 0.0) input 0.0
 
 def linear_layer (input : h => Float)
-                 (weight: h => h2 => Float)
-                 (bias: h2 => Float) : h2 => Float =
+                 ((weight, bias): WnB h h2)
+                   : h2 => Float =
     for i : h2.
        bias.i + sum for j : h. weight.j.i * input.j
     
 
 ' Initialization
 
-hidden = 10
-key1 = (newKey 0)
-key2 = (newKey 1)
-(k11, k12) = splitKey key1
-(k21, k22) = splitKey key2
+key = (newKey 0)
 
 ' Weights and biases
 
-w1 : ((Fin 2) => (Fin 10) => Float) = for i j. rand (ixkey k11 i)
-b1 : ((Fin 10) => Float) = for i. rand (ixkey k12 i)
+def initWnB (key: Key) : WnB in out =
+  (k1, k2) = splitKey key
+  ((for i j. rand (ixkey2 k1 i j)),
+   (for i. rand (ixkey k2 i)))
 
-w2 : ((Fin 10) => (Fin 2) => Float) = for i j. rand (ixkey k21 i)
-b2 : ((Fin 2) => Float) = for i. rand (ixkey k22 i)
+def Parameters (in : Type) (h2 : Type) (class: Type) : Type =
+  (WnB in h2 & WnB h2 class)
 
-params = (w1, b1, w2, b2)
+' Declare the size of the network
+
+Params = Parameters (Fin 2) (Fin 10) (Fin 2)
+
+(k1, k2) = splitKey key
+params : Params = (initWnB k1, initWnB k2)
 
 :t params
-
   
 ' Type of the parameters
 
-def Parameters (h : Type) (h2 : Type) (class: Type) : Type =
-  ((h => h2 => Float) &
-   (h2 => Float) &
-   (h2 => class => Float) &
-   (class => Float))
-
 def forward
-    ((w1, b1, w2, b2) : Parameters h h2 class) 
+    ((wnb1, wnb2) : Parameters h h2 class) 
     (input : (h => Float))
     (target: Int32)
       : Float = 
-  out1 = linear_layer input w1 b1
+  out1 = linear_layer input wnb1
   out2 = for j. relu out1.j
-  out3 = linear_layer out2 w2 b2
+  out3 = linear_layer out2 wnb2
   (logsoftmax out3).(target@class)
 
-def loss (params : Parameters (Fin 2) (Fin 10) (Fin 2)) : Float =
+def loss (params : Params) : Float =
   -mean for i. forward params (to_vec x.i) y.i 
-
-grad_forward = grad loss
 
 ' SGD
 
 rate = 0.003
-
 loop = withState params \ paramsRef.
   for i : (Fin 100).
-      loss : Float  = loss (get paramsRef)
-      grads : Parameters (Fin 2) (Fin 10) (Fin 2)  = grad_forward (get paramsRef)
-      (dw1, db1, dw2, db2) = grads
-      params2 = (w1 - rate .* dw1, b1 - rate .* db1,
-                 w2 - rate .* dw2, b2 - rate .* db2)
-      paramsRef := params2
-      loss
+      eloss: Float  = loss (get paramsRef)
+      grads : Params  = (grad loss) (get paramsRef)
+      paramsRef := (get paramsRef)  - rate .* grads
+      eloss
 
 epochloss = (fst loop)
 epoch  = for i : (Fin 100). IToF (ordinal i)
@@ -93,16 +104,8 @@ epoch  = for i : (Fin 100). IToF (ordinal i)
 
 :plot zip epoch epochloss 
 
-:t (snd loop):Parameters (Fin 2) (Fin 10) (Fin 2)
-
 
 
  
 
 
--- want to learn the parameters of w1 b1 w2 b2
-
-
--- 1 - get gradient of forward
--- 2 - loop
--- 3 - state in order to update
