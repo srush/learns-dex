@@ -1,0 +1,148 @@
+
+' Transformers in Dex
+
+-- Prelude
+
+def castTable (m:Type) (xs:n=>a) : m=>a =
+  case size m == size n of
+     True  -> for i. xs.(unsafeFromOrdinal _ (ordinal i))
+     False -> todo
+
+def idx2 (inp : a => b => c) (x : b): a => c = 
+    for i. inp.i.x
+
+def uncurrytab (inp : (a & b)=> c) : a => b => c = 
+    for i j. inp.(i, j)
+
+def fsttab (inp : (a & b)=> c) (x:a) : b => c = 
+    (uncurrytab inp).x
+    
+def sndtab (inp : (a & b)=> c) (x:b) : a => c = 
+    (uncurrytab inp) `idx2` x
+
+' Constants
+
+Batch  = Fin 3
+Hidden  = Fin 128
+BigHidden  = Fin 256
+Vocab = Fin 10000
+Heads = Fin 8
+HeadDim  = Fin 16
+Layers  = Fin 8
+dmodel = 128.0
+
+
+' Words and Sentences
+
+raw_sent1 = [10, 200, 20, 21]
+raw_sent2 = [10, 200, 21]
+raw_sent3 = [10, 200, 21, 23, 15]
+
+input : (Batch => List Vocab) =
+    [AsList _ (for i. (raw_sent1.i)@Vocab),
+     AsList _ (for i. (raw_sent2.i)@Vocab),
+     AsList _ (for i. (raw_sent3.i)@Vocab)] 
+
+' Embeddings
+
+embed : (Vocab => Hidden => Float)  = zero
+
+def position_embeddings (pos:Int) (i:Int) : Float =
+    fpos = IToF pos
+    fi = IToF i
+    case ((i `mod` 2) == 0) of
+       True -> sin (fpos / (10000.0 `pow` (fi / dmodel)))
+       False -> cos (fpos / (10000.0 `pow` (fi-1.0) / dmodel))
+
+def add_pos (in : (a => b => Float)) :  (a => b =>Float) =
+    for pos i . in.pos.i + position_embeddings (ordinal pos) (ordinal i)
+
+
+' Attention and Multiheads
+
+def attention (_: VSpace b) ?=> (q: key => Float)
+                                (k: time => key => Float)
+                                (v: time => b) : b =
+    attn = softmax for t. (q `vdot` k.t  / 64.0)
+    sum for t. attn.t .* v.t
+
+
+
+def Proj (n: Type) : Type =  (n & Heads) => (n & Heads) => Float
+def MHAWeight (n: Type) : Type = (Proj n & Proj n & Proj n & Proj n)
+
+def multihead (in : time => (keyt & Heads) => Float)
+              ((qw, kw, vw, ow) : MHAWeight keyt)  :
+              time => (keyt & Heads) => Float =
+         
+         Full = time => (keyt & Heads) => Float
+         queries : Full  = in ** qw
+         key : Full   = in ** kw
+         values : Full  = in ** vw
+         interp =
+            for time : time.
+               for (k, h).
+                   k2 = (for t. key.t `sndtab` h)
+                   v2 = (for t. values.t `sndtab` h) 
+                   (attention (queries.time `sndtab` h) k2 v2).k
+         interp ** ow
+          
+
+' FFN
+
+def WnB (a:Type) (b:Type) : Type  =
+   (a => b => Float &
+    b => Float)
+
+def relu (input : Float) : Float =
+  select (input > 0.0) input 0.0
+
+def linear_layer (input : h => Float)
+                 ((weight, bias): WnB h h2)
+                   : h2 => Float =
+    for i : h2.
+       bias.i + sum for j : h. weight.j.i * input.j
+
+def FFN (in : Type) (h2 : Type) (class: Type) : Type =
+  (WnB in h2 & WnB h2 class)
+
+def ffn
+    (input : (h => Float))
+    ((wnb1, wnb2) : FFN h h2 out) 
+      : out => Float = 
+  out1 = linear_layer input wnb1
+  out2 = for j. relu out1.j
+  out3 = linear_layer out2 wnb2
+  for j. relu out3.j
+  
+' LayerNorm
+
+-- Unparameterized for now
+
+def layernorm (in : (a => Float)) : (a => Float) =
+    m = mean in
+    v = std in
+    for i. (in.i - m) / v
+
+' Put it all together 
+
+weights : Layers => MHAWeight HeadDim = for l. (zero, zero, zero, zero)
+weights_ffn : Layers => FFN Hidden BigHidden Hidden =
+     for l. ((zero, zero), (zero, zero))
+
+def model (inp : Batch => List (Vocab)) : Batch => List (Hidden=>Float) =
+    for b.
+        (AsList n tab)= inp.b
+        x = add_pos (for i. embed.(tab.i))
+        (_, out) = withState x \ xRef.
+            for layer : Layers.
+                inp = for i. castTable (HeadDim & Heads) x.i
+                x2 = multihead inp weights.layer
+                x3 = for i. castTable Hidden x2.i
+                x4 = x + for i. layernorm x3.i
+                x5 = for i. ffn x4.i weights_ffn.layer
+                xRef := x4 + for i. layernorm x5.i
+        AsList n out
+
+
+
