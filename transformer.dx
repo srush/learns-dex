@@ -136,7 +136,7 @@ def model (inp : Batch => List (Vocab)) : Batch => List (Hidden=>Float) =
         x = add_pos (for i. embed.(tab.i))
         (_, out) = withState x \ xRef.
             for layer : Layers.
-                inp = for i. castTable (HeadDim & Heads) x.i
+                inp = for i. castTable (HeadDim & Heads) (get xRef).i
                 x2 = multihead inp weights.layer
                 x3 = for i. castTable Hidden x2.i
                 x4 = x + for i. layernorm x3.i
