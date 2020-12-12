@@ -139,7 +139,7 @@ def model (inp : Batch => List (Vocab)) : Batch => List (Hidden=>Float) =
                 inp = for i. castTable (HeadDim & Heads) (get xRef).i
                 x2 = multihead inp weights.layer
                 x3 = for i. castTable Hidden x2.i
-                x4 = x + for i. layernorm x3.i
+                x4 = (get xRef) + for i. layernorm x3.i
                 x5 = for i. ffn x4.i weights_ffn.layer
                 xRef := x4 + for i. layernorm x5.i
         AsList n out
