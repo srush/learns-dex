@@ -1,0 +1,92 @@
+' Topic modeling in Dex
+
+' Extra Prelude functions
+
+def dec (v: Ref h Int) : {State h} Unit =
+    v := (get v) - 1
+def inc (v: Ref h Int) : {State h} Unit =
+    v := (get v) + 1
+def uncurrytab (inp : (a & b)=> c) : a => b => c = 
+    for i j. inp.(i, j)
+
+def bincount (inp : a => b) : b => Int =
+    snd $ withState zero \ acc .
+        for i. inc (acc!(inp.i))
+
+def tripRef (v: Ref h (a & b & c)) :  (Ref h a & Ref h b & Ref h c) =
+   ((fstRef v), (fstRef (sndRef v)), (sndRef (sndRef v)))
+
+def getf (v: Ref h Int) : {State h} Float = IToF ( get v )
+def sizef (n:Type) : Float = IToF (size n)
+
+
+def categorical (k:Key) (dist: a => Float) : a =
+    r:Float = rand k
+    (_, (_, out)) = withState (r, 0@a) \ refs .
+      (r_ref, idx_ref) = (fstRef refs, sndRef refs) 
+      for t: a.
+          old = get r_ref
+          r_ref := old - dist.t
+          new = get r_ref
+          idx_ref := select (new < 0.0 && old > 0.0) t (get idx_ref)
+    out      
+
+' Types for topic modeling
+
+Topics = Fin 25
+Documents = Fin 100
+Tokens = Fin 25
+Vocab = Fin 1000
+Size = (Documents & Tokens)
+
+
+' Hyperparameters
+
+alpha = 0.1
+beta = 0.01
+
+' Data
+
+key = newKey 0
+tokens : Size => Vocab = for i. randIdx (ixkey key i)
+docs : Size => Documents = for (i,j) : (Size). i
+
+' Counters
+
+topic_token : Size => Topics = for i. randIdx (ixkey key i)
+topics : Topics => Int = bincount topic_token
+topic_word: Topics => Vocab => Int  =  uncurrytab (bincount (for i:Size. (topic_token.i, tokens.i)))
+untokens = uncurrytab topic_token
+topic_document : Documents  => Topics => Int = for i : Documents.
+        (bincount untokens.i)
+
+
+' Collapsed Gibbs Sampling
+
+
+(_, final) = withState (topic_document, topic_word, topics) \ state . 
+  for i : Size.
+   k = ixkey key i
+   (topic_document_ref, topic_word_ref, topics_ref) = tripRef state
+   
+   (doc, token, topic) = (docs.i, tokens.i, topic_token.i)
+
+   -- Decrement
+   dec topic_document_ref!doc!topic
+   dec topic_word_ref!topic!token 
+   dec topics_ref!topic
+   
+   -- resampling
+   dist = for t : Topics.
+        ((((getf topic_word_ref!t!token) + beta) /
+         (((getf topics_ref!t) + (sizef Vocab)) * beta))
+       * (((getf topic_document_ref!doc!t)) + alpha) /
+         (((sizef Tokens)) + ((sizef Topics)) * alpha))   
+   new_topic = categorical k dist
+                
+   -- Update
+   inc topic_document_ref!doc!new_topic
+   inc topic_word_ref!new_topic!token
+   inc topics_ref!new_topic
+
+:t final
